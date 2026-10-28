@@ -1,10 +1,9 @@
-import os
 import re
 import json
 import time
 import random
 import asyncio
-from typing import List, Optional, Type, TypeVar
+from typing import List, Dict, Any, Optional, Type, TypeVar
 from pydantic import BaseModel, ValidationError
 import litellm
 from litellm import acompletion
@@ -13,6 +12,8 @@ from .models import VideoSnapshot
 
 litellm.suppress_debug_info = True
 litellm.enable_json_schema_validation = True
+# Automatically drop unsupported parameters if a specific provider doesn't recognize them
+litellm.drop_params = True
 
 console = Console()
 T = TypeVar("T", bound=BaseModel)
@@ -48,62 +49,40 @@ class AsyncRateLimiter:
 
 class UniversalLLMClient:
     """
-    Universal Async LiteLLM Client supporting any provider (Omniroute, OpenAI, Anthropic, Gemini,
-    Ollama, vLLM, Groq, DeepSeek) with multimodal image routing and self-healing JSON validation.
+    Universal Async LiteLLM Client supporting any provider or custom OpenAI-compatible
+    server, with full support for custom inference parameters (`model_kwargs`),
+    custom `api_key`, `api_base`, `max_tokens`, and `extra_headers`.
     """
 
     def __init__(
         self,
-        model: Optional[str] = None,
+        model: str = "gemini/gemini-2.5-flash",
         vision_model: Optional[str] = None,
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+        model_kwargs: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
         max_retries: int = 4,
         rate_limiter: Optional[AsyncRateLimiter] = None,
     ):
-        raw_model = (
-            model
-            or os.getenv("LLM_MODEL")
-            or os.getenv("OMNIROUTE_CHAT_MODEL")
-            or "gemini/gemini-2.5-flash"
-        )
-        self.api_base = (
-            api_base
-            or os.getenv("LLM_API_BASE")
-            or os.getenv("OMNIROUTE_API_BASE")
-        )
-        self.api_key = (
-            api_key
-            or os.getenv("LLM_API_KEY")
-            or os.getenv("OMNIROUTE_API_KEY")
-        )
-
-        # Normalize custom provider 'omniroute' to OpenAI-compatible wire format for LiteLLM
-        self.model = self._normalize_model_name(raw_model)
-        self.vision_model = self._normalize_model_name(vision_model) if vision_model else None
-
+        self.model = model
+        self.vision_model = vision_model
+        self.api_base = api_base
+        self.api_key = api_key
         self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.model_kwargs = model_kwargs or {}
+        self.extra_headers = extra_headers or {}
         self.max_retries = max_retries
         self.rate_limiter = rate_limiter or AsyncRateLimiter(max_concurrency=8)
-
-    @classmethod
-    def _normalize_model_name(cls, model_str: Optional[str]) -> Optional[str]:
-        if not model_str:
-            return None
-        # Handle omniroute alias e.g. 'omniroute/chat' -> 'openai/chat'
-        if model_str.startswith("omniroute/"):
-            return "openai/" + model_str.split("/", 1)[1]
-        if model_str == "omniroute":
-            return "openai/chat"
-        # If user passed just 'chat', interpret as openai/chat if custom endpoint is used
-        if model_str == "chat":
-            return "openai/chat"
-        return model_str
 
     @staticmethod
     def _extract_json_block(raw_text: str) -> str:
         raw_text = raw_text.strip()
+        # Strip <think>...</think> reasoning blocks if using DeepSeek-R1 / QwQ / reasoning models
+        raw_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
         fence_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", raw_text, re.DOTALL)
         if fence_match:
             return fence_match.group(1).strip()
@@ -114,19 +93,41 @@ class UniversalLLMClient:
 
     @staticmethod
     def _model_supports_vision(target_model: str) -> bool:
-        # 'chat' from Omniroute is multimodal
-        if "chat" in target_model.lower():
-            return True
         try:
             if litellm.supports_vision(model=target_model):
                 return True
         except Exception:
             pass
-        vision_keywords = ("vl", "vision", "llava", "pixtral", "gemini", "gpt-4o", "claude-3", "claude-4", "gemma3")
+        vision_keywords = (
+            "vl", "vision", "llava", "pixtral", "gemini", "gpt-4o",
+            "gpt-4.1", "claude-3", "claude-4", "gemma3", "qwen2.5-vl",
+        )
         return any(k in target_model.lower() for k in vision_keywords)
 
+    def _build_call_kwargs(self, target_model: str, messages: list) -> Dict[str, Any]:
+        """Merges standard and custom parameters cleanly for LiteLLM."""
+        kwargs: Dict[str, Any] = {
+            "model": target_model,
+            "messages": messages,
+            "temperature": self.temperature,
+        }
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.extra_headers:
+            kwargs["extra_headers"] = self.extra_headers
+
+        # Merge user's custom --model-kwargs (can override temperature/max_tokens or add top_p, reasoning_effort, extra_body, etc.)
+        if self.model_kwargs:
+            kwargs.update(self.model_kwargs)
+
+        return kwargs
+
     async def _adescribe_snapshots_via_vision_model(self, snapshots: List[VideoSnapshot], section_title: str) -> str:
-        v_model = self.vision_model or self.model
+        v_model = self.vision_model or "gemini/gemini-2.5-flash"
         content_blocks = [
             {
                 "type": "text",
@@ -143,18 +144,9 @@ class UniversalLLMClient:
                 "image_url": {"url": f"data:image/jpeg;base64,{snap.base64_jpeg}"},
             })
 
-        kwargs = {
-            "model": v_model,
-            "messages": [{"role": "user", "content": content_blocks}],
-            "temperature": 0.1,
-        }
-        if self.api_base:
-            kwargs["api_base"] = self.api_base
-        if self.api_key:
-            kwargs["api_key"] = self.api_key
-
+        call_kwargs = self._build_call_kwargs(v_model, [{"role": "user", "content": content_blocks}])
         async with self.rate_limiter:
-            resp = await acompletion(**kwargs)
+            resp = await acompletion(**call_kwargs)
         return resp.choices[0].message.content
 
     async def agenerate_structured(
@@ -203,16 +195,8 @@ class UniversalLLMClient:
         last_error = None
         for attempt in range(1, self.max_retries + 1):
             try:
-                kwargs = {
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": self.temperature,
-                }
-                if self.api_base:
-                    kwargs["api_base"] = self.api_base
-                if self.api_key:
-                    kwargs["api_key"] = self.api_key
-                if supports_native_schema and attempt == 1:
+                kwargs = self._build_call_kwargs(self.model, messages)
+                if supports_native_schema and attempt == 1 and "response_format" not in kwargs:
                     kwargs["response_format"] = response_model
 
                 async with self.rate_limiter:

@@ -1,4 +1,5 @@
 import os
+import json
 import asyncio
 import argparse
 from pathlib import Path
@@ -41,20 +42,22 @@ def add_common_args(parser: argparse.ArgumentParser):
         default=default_model,
         help=(
             f"LiteLLM model string (default: '{default_model}'). "
-            "Examples: 'omniroute/chat', 'openai/gpt-4o', 'anthropic/claude-3-7-sonnet-latest', 'ollama/qwen2.5:32b'."
+            "Examples: 'openrouter/deepseek/deepseek-r1', 'openai/chat', 'ollama/qwen2.5:32b'."
         ),
     )
     parser.add_argument("--vision-model", default=None, help="Dedicated Vision LLM when --model is text-only.")
     parser.add_argument(
         "--api-base",
         default=default_api_base,
-        help="Optional custom API base URL (defaults to LLM_API_BASE or OMNIROUTE_API_BASE from env).",
+        help="Custom API base URL (defaults to LLM_API_BASE or OMNIROUTE_API_BASE from env).",
     )
     parser.add_argument(
         "--api-key",
         default=default_api_key,
-        help="Optional custom API key (defaults to LLM_API_KEY or OMNIROUTE_API_KEY from env).",
+        help="Custom API key (defaults to LLM_API_KEY or OMNIROUTE_API_KEY from env).",
     )
+    parser.add_argument("--temperature", type=float, default=0.1, help="Sampling temperature (default: 0.1).")
+    parser.add_argument("--max-tokens", type=int, default=None, help="Max output tokens per LLM completion.")
     parser.add_argument(
         "--llm-concurrency",
         type=int,
@@ -145,6 +148,8 @@ async def async_main():
     add_common_args(combine_parser)
 
     args = parser.parse_args()
+    custom_model_kwargs = json.loads(args.model_kwargs) if args.model_kwargs else {}
+    custom_headers = json.loads(args.extra_headers) if args.extra_headers else {}
 
     rate_limiter = AsyncRateLimiter(max_concurrency=args.llm_concurrency, rpm_limit=args.rpm_limit)
     cache = PipelineCache(db_path=args.cache_db)
@@ -153,6 +158,10 @@ async def async_main():
         vision_model=args.vision_model,
         api_base=args.api_base,
         api_key=args.api_key,
+        temperature=args.temperature,
+        max_tokens=args.max_tokens,
+        model_kwargs=custom_model_kwargs,
+        extra_headers=custom_headers,
         rate_limiter=rate_limiter,
     )
     engine = SkillForgeEngine(llm=llm, cache=cache)

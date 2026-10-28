@@ -109,7 +109,7 @@ class WhisperAudioTranscriber:
 
     @staticmethod
     def _download_audio_stream(video_id: str, temp_dir: str) -> Path:
-        video_url = f"[https://www.youtube.com/watch?v=](https://www.youtube.com/watch?v=){video_id}"
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
         out_template = str(Path(temp_dir) / f"{video_id}.%(ext)s")
         ydl_opts = {
             "format": "bestaudio[ext=m4a][abr<=64]/bestaudio[abr<=64]/bestaudio[ext=m4a]/bestaudio",

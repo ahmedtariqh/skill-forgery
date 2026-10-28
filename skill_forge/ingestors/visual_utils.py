@@ -88,7 +88,7 @@ class VideoSnapshotExtractor:
 
     @staticmethod
     def _download_compact_video(video_id: str, temp_dir: str) -> Path:
-        video_url = f"[https://www.youtube.com/watch?v=](https://www.youtube.com/watch?v=){video_id}"
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
         out_template = str(Path(temp_dir) / f"{video_id}_vid.%(ext)s")
         ydl_opts = {
             "format": "bestvideo[height<=720][ext=mp4]/best[height<=720][ext=mp4]/bestvideo[height<=480]/best[height<=480]",
