@@ -1,3 +1,4 @@
+import os
 import time
 import asyncio
 import tempfile
@@ -39,14 +40,40 @@ class WhisperAudioTranscriber:
         model_size: str = "small",
         device: str = "auto",
         compute_type: str = "auto",
-        api_model: str = "groq/whisper-large-v3-turbo",
+        api_model: Optional[str] = None,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
         batch_size: int = 8,
     ):
         self.mode = mode.lower()
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
-        self.api_model = api_model
+
+        raw_api_model = (
+            api_model
+            or os.getenv("WHISPER_API_MODEL")
+            or os.getenv("OMNIROUTE_STT_MODEL")
+            or "groq/whisper-large-v3-turbo"
+        )
+        # Normalize omniroute alias
+        if raw_api_model.startswith("omniroute/"):
+            self.api_model = "openai/" + raw_api_model.split("/", 1)[1]
+        elif raw_api_model in ("omniroute", "stt"):
+            self.api_model = "openai/stt"
+        else:
+            self.api_model = raw_api_model
+
+        self.api_base = (
+            api_base
+            or os.getenv("WHISPER_API_BASE")
+            or os.getenv("OMNIROUTE_API_BASE")
+        )
+        self.api_key = (
+            api_key
+            or os.getenv("WHISPER_API_KEY")
+            or os.getenv("OMNIROUTE_API_KEY")
+        )
         self.batch_size = batch_size
 
         self._local_model = None
@@ -105,6 +132,10 @@ class WhisperAudioTranscriber:
             if self.mode == "api":
                 with open(audio_path, "rb") as audio_file:
                     kwargs = {"model": self.api_model, "file": audio_file}
+                    if self.api_base:
+                        kwargs["api_base"] = self.api_base
+                    if self.api_key:
+                        kwargs["api_key"] = self.api_key
                     if preferred_language:
                         kwargs["language"] = preferred_language
                     response = litellm_transcription(**kwargs)

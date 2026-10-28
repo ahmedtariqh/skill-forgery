@@ -1,3 +1,4 @@
+import os
 import re
 import json
 import time
@@ -47,25 +48,58 @@ class AsyncRateLimiter:
 
 class UniversalLLMClient:
     """
-    Universal Async LiteLLM Client supporting any provider (OpenAI, Anthropic, Gemini,
+    Universal Async LiteLLM Client supporting any provider (Omniroute, OpenAI, Anthropic, Gemini,
     Ollama, vLLM, Groq, DeepSeek) with multimodal image routing and self-healing JSON validation.
     """
 
     def __init__(
         self,
-        model: str = "gemini/gemini-2.5-flash",
+        model: Optional[str] = None,
         vision_model: Optional[str] = None,
         api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
         temperature: float = 0.1,
         max_retries: int = 4,
         rate_limiter: Optional[AsyncRateLimiter] = None,
     ):
-        self.model = model
-        self.vision_model = vision_model
-        self.api_base = api_base
+        raw_model = (
+            model
+            or os.getenv("LLM_MODEL")
+            or os.getenv("OMNIROUTE_CHAT_MODEL")
+            or "gemini/gemini-2.5-flash"
+        )
+        self.api_base = (
+            api_base
+            or os.getenv("LLM_API_BASE")
+            or os.getenv("OMNIROUTE_API_BASE")
+        )
+        self.api_key = (
+            api_key
+            or os.getenv("LLM_API_KEY")
+            or os.getenv("OMNIROUTE_API_KEY")
+        )
+
+        # Normalize custom provider 'omniroute' to OpenAI-compatible wire format for LiteLLM
+        self.model = self._normalize_model_name(raw_model)
+        self.vision_model = self._normalize_model_name(vision_model) if vision_model else None
+
         self.temperature = temperature
         self.max_retries = max_retries
         self.rate_limiter = rate_limiter or AsyncRateLimiter(max_concurrency=8)
+
+    @classmethod
+    def _normalize_model_name(cls, model_str: Optional[str]) -> Optional[str]:
+        if not model_str:
+            return None
+        # Handle omniroute alias e.g. 'omniroute/chat' -> 'openai/chat'
+        if model_str.startswith("omniroute/"):
+            return "openai/" + model_str.split("/", 1)[1]
+        if model_str == "omniroute":
+            return "openai/chat"
+        # If user passed just 'chat', interpret as openai/chat if custom endpoint is used
+        if model_str == "chat":
+            return "openai/chat"
+        return model_str
 
     @staticmethod
     def _extract_json_block(raw_text: str) -> str:
@@ -80,6 +114,9 @@ class UniversalLLMClient:
 
     @staticmethod
     def _model_supports_vision(target_model: str) -> bool:
+        # 'chat' from Omniroute is multimodal
+        if "chat" in target_model.lower():
+            return True
         try:
             if litellm.supports_vision(model=target_model):
                 return True
@@ -89,7 +126,7 @@ class UniversalLLMClient:
         return any(k in target_model.lower() for k in vision_keywords)
 
     async def _adescribe_snapshots_via_vision_model(self, snapshots: List[VideoSnapshot], section_title: str) -> str:
-        v_model = self.vision_model or "gemini/gemini-2.5-flash"
+        v_model = self.vision_model or self.model
         content_blocks = [
             {
                 "type": "text",
@@ -106,12 +143,18 @@ class UniversalLLMClient:
                 "image_url": {"url": f"data:image/jpeg;base64,{snap.base64_jpeg}"},
             })
 
+        kwargs = {
+            "model": v_model,
+            "messages": [{"role": "user", "content": content_blocks}],
+            "temperature": 0.1,
+        }
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+
         async with self.rate_limiter:
-            resp = await acompletion(
-                model=v_model,
-                messages=[{"role": "user", "content": content_blocks}],
-                temperature=0.1,
-            )
+            resp = await acompletion(**kwargs)
         return resp.choices[0].message.content
 
     async def agenerate_structured(
@@ -167,6 +210,8 @@ class UniversalLLMClient:
                 }
                 if self.api_base:
                     kwargs["api_base"] = self.api_base
+                if self.api_key:
+                    kwargs["api_key"] = self.api_key
                 if supports_native_schema and attempt == 1:
                     kwargs["response_format"] = response_model
 

@@ -1,9 +1,16 @@
+import os
 import asyncio
 import argparse
 from pathlib import Path
 from typing import List, Dict, Optional
 from rich.console import Console
 from rich.table import Table
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 from skill_forge.models import SkillClusterAssignment, SynthesizedAgentSkill
 from skill_forge.cache import PipelineCache
@@ -21,13 +28,33 @@ console = Console()
 
 
 def add_common_args(parser: argparse.ArgumentParser):
+    default_model = (
+        os.getenv("LLM_MODEL")
+        or os.getenv("OMNIROUTE_CHAT_MODEL")
+        or "gemini/gemini-2.5-flash"
+    )
+    default_api_base = os.getenv("LLM_API_BASE") or os.getenv("OMNIROUTE_API_BASE")
+    default_api_key = os.getenv("LLM_API_KEY") or os.getenv("OMNIROUTE_API_KEY")
+
     parser.add_argument(
         "--model",
-        default="gemini/gemini-2.5-flash",
-        help="LiteLLM model string (e.g., 'openai/gpt-4o', 'anthropic/claude-3-7-sonnet-latest', 'ollama/qwen2.5:32b').",
+        default=default_model,
+        help=(
+            f"LiteLLM model string (default: '{default_model}'). "
+            "Examples: 'omniroute/chat', 'openai/gpt-4o', 'anthropic/claude-3-7-sonnet-latest', 'ollama/qwen2.5:32b'."
+        ),
     )
     parser.add_argument("--vision-model", default=None, help="Dedicated Vision LLM when --model is text-only.")
-    parser.add_argument("--api-base", default=None, help="Optional custom API base URL.")
+    parser.add_argument(
+        "--api-base",
+        default=default_api_base,
+        help="Optional custom API base URL (defaults to LLM_API_BASE or OMNIROUTE_API_BASE from env).",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=default_api_key,
+        help="Optional custom API key (defaults to LLM_API_KEY or OMNIROUTE_API_KEY from env).",
+    )
     parser.add_argument(
         "--llm-concurrency",
         type=int,
@@ -84,10 +111,26 @@ async def async_main():
     yt_parser.add_argument("--ingest-concurrency", type=int, default=4)
     yt_parser.add_argument("--yt-delay", type=float, default=0.5)
     yt_parser.add_argument("--no-whisper-fallback", action="store_true")
-    yt_parser.add_argument("--whisper-mode", choices=["local", "api"], default="local")
+    default_whisper_mode = "api" if (os.getenv("WHISPER_API_MODEL") or os.getenv("OMNIROUTE_STT_MODEL")) else "local"
+    default_whisper_api = (
+        os.getenv("WHISPER_API_MODEL")
+        or os.getenv("OMNIROUTE_STT_MODEL")
+        or "groq/whisper-large-v3-turbo"
+    )
+    yt_parser.add_argument("--whisper-mode", choices=["local", "api"], default=default_whisper_mode)
     yt_parser.add_argument("--whisper-model", default="small")
     yt_parser.add_argument("--whisper-device", choices=["auto", "cuda", "cpu"], default="auto")
-    yt_parser.add_argument("--whisper-api-model", default="groq/whisper-large-v3-turbo")
+    yt_parser.add_argument("--whisper-api-model", default=default_whisper_api)
+    yt_parser.add_argument(
+        "--whisper-api-base",
+        default=os.getenv("WHISPER_API_BASE") or os.getenv("OMNIROUTE_API_BASE"),
+        help="Optional API base URL for Whisper API endpoint.",
+    )
+    yt_parser.add_argument(
+        "--whisper-api-key",
+        default=os.getenv("WHISPER_API_KEY") or os.getenv("OMNIROUTE_API_KEY"),
+        help="Optional API key for Whisper API endpoint.",
+    )
     yt_parser.add_argument("--no-visuals", action="store_true", help="Disable video snapshot extraction.")
     yt_parser.add_argument("--max-snapshots", type=int, default=12)
     yt_parser.add_argument("--snapshot-interval", type=float, default=8.0)
@@ -109,6 +152,7 @@ async def async_main():
         model=args.model,
         vision_model=args.vision_model,
         api_base=args.api_base,
+        api_key=args.api_key,
         rate_limiter=rate_limiter,
     )
     engine = SkillForgeEngine(llm=llm, cache=cache)
@@ -158,6 +202,8 @@ async def async_main():
             model_size=args.whisper_model,
             device=args.whisper_device,
             api_model=args.whisper_api_model,
+            api_base=args.whisper_api_base,
+            api_key=args.whisper_api_key,
         )
         snapshot_extractor = VideoSnapshotExtractor(
             max_snapshots=args.max_snapshots,

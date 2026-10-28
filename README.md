@@ -119,20 +119,41 @@ skill-forgery/
 pip install -r requirements.txt
 ```
 
-### 3. Environment Variables
-Create a `.env` file or export your LLM API keys:
+### 3. Environment Variables & Custom LLM Provider
 
+Copy `.env.example` to `.env`:
 ```bash
-# Gemini
+cp .env.example .env
+```
+
+#### Custom Omniroute Provider (Preconfigured)
+SkillForge natively supports the custom **Omniroute** OpenAI-compatible provider for both multimodal LLM operations and Speech-to-Text transcription:
+
+```env
+# Custom Omniroute Provider
+OMNIROUTE_API_BASE=https://ubuntu-proot.taild785f2.ts.net/v1
+OMNIROUTE_API_KEY=sk-35ab26f1551c058d-6e9297-a9809721
+OMNIROUTE_CHAT_MODEL=omniroute/chat
+OMNIROUTE_STT_MODEL=omniroute/stt
+
+# Defaults for execution
+LLM_MODEL=openai/chat
+LLM_API_BASE=https://ubuntu-proot.taild785f2.ts.net/v1
+LLM_API_KEY=sk-35ab26f1551c058d-6e9297-a9809721
+WHISPER_API_MODEL=openai/stt
+WHISPER_API_BASE=https://ubuntu-proot.taild785f2.ts.net/v1
+WHISPER_API_KEY=sk-35ab26f1551c058d-6e9297-a9809721
+```
+
+- **`chat`**: Multimodal LLM handling structured extraction, synthesis, and image analysis.
+- **`stt`**: High-accuracy speech-to-text model for YouTube audio transcription fallback.
+
+#### Standard Cloud Providers (Optional)
+Alternatively, you can provide official API keys:
+```bash
 export GEMINI_API_KEY="your-gemini-key"
-
-# OpenAI
 export OPENAI_API_KEY="your-openai-key"
-
-# Anthropic
 export ANTHROPIC_API_KEY="your-anthropic-key"
-
-# Groq (optional, for ultra-fast Whisper API transcription)
 export GROQ_API_KEY="your-groq-key"
 ```
 
