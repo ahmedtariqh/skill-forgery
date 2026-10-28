@@ -1,0 +1,13 @@
+litellm>=1.60.0
+pydantic>=2.9.0
+pymupdf>=1.24.10
+ebooklib>=0.18
+beautifulsoup4>=4.12.3
+youtube-transcript-api>=1.0.0
+yt-dlp>=2025.1.0
+faster-whisper>=1.1.0
+ctranslate2>=4.5.0
+opencv-python-headless>=4.10.0.84
+pillow>=10.4.0
+numpy>=1.26.4
+rich>=13.9.0
